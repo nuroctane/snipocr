@@ -1,0 +1,13 @@
+pywin32>=306
+Pillow>=10.0.0
+pystray>=0.19.5
+psutil>=5.9.0
+winotify>=1.1.0
+winrt-runtime>=3.0.0
+winrt-Windows.Foundation>=3.0.0
+winrt-Windows.Foundation.Collections>=3.0.0
+winrt-Windows.Globalization>=3.0.0
+winrt-Windows.Graphics.Imaging>=3.0.0
+winrt-Windows.Media.Ocr>=3.0.0
+winrt-Windows.Storage>=3.0.0
+winrt-Windows.Storage.Streams>=3.0.0
