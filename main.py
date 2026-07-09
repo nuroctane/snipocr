@@ -1,5 +1,8 @@
 """
-SnipOCR — automatic local OCR when you screenshot with Windows Snipping Tool.
+SnipOCR — automatic local OCR when you take a screenshot.
+
+Windows: Win+Shift+S (Snipping Tool) → OCR → clipboard text
+macOS:   ⌘⇧4 / ⌘⌃⇧4 (Screenshot) → OCR → clipboard text
 
 Usage:
     python main.py
@@ -9,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import tkinter as tk
 from pathlib import Path
 
@@ -18,23 +22,31 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.paths import logo_ico, logo_png
+from app.platform_util import (
+    IS_MACOS,
+    IS_WINDOWS,
+    PLATFORM_NAME,
+    log_dir,
+    snip_hotkey_hint,
+    snip_tool_name,
+)
 from app.result_ui import ResultPopup
 from app.service import SnipOCRService
 from app.tray import TrayApp
 
-LOG_DIR = Path.home() / "AppData" / "Local" / "SnipOCR"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR = log_dir()
 LOG_FILE = LOG_DIR / "snipocr.log"
 
 
 def _apply_root_icon(root: tk.Tk) -> None:
-    ico = logo_ico()
     png = logo_png(32)
-    try:
-        if ico.exists():
-            root.iconbitmap(default=str(ico))
-    except Exception:
-        pass
+    if IS_WINDOWS:
+        ico = logo_ico()
+        try:
+            if ico.exists():
+                root.iconbitmap(default=str(ico))
+        except Exception:
+            pass
     try:
         if png.exists():
             from PIL import Image, ImageTk
@@ -59,9 +71,17 @@ def setup_logging() -> None:
 def main() -> int:
     setup_logging()
     log = logging.getLogger("snipocr")
-    log.info("Starting SnipOCR — log: %s", LOG_FILE)
+    log.info("Starting SnipOCR on %s — log: %s", PLATFORM_NAME, LOG_FILE)
 
-    # Hidden root for tk popups (must live on main thread).
+    if PLATFORM_NAME not in ("windows", "macos"):
+        log.warning(
+            "Unsupported platform %r — clipboard watching may be limited",
+            PLATFORM_NAME,
+        )
+
+    # Hidden root for tk popups.
+    # Windows: tk owns main thread.
+    # macOS: AppKit/pystray owns main thread; tk runs on a secondary thread.
     root = tk.Tk()
     root.withdraw()
     root.title("SnipOCR")
@@ -97,14 +117,21 @@ def main() -> int:
             engine_name=result.engine_name,
             duration_ms=result.duration_ms,
             language=result.language,
-            autohide_seconds=0,  # stay open when user asked
+            autohide_seconds=0,
         )
+
+    tray_holder: dict = {}
 
     def on_quit() -> None:
         log.info("Quit requested")
         service.stop()
-        tray.stop()
-        root.after(0, root.destroy)
+        tray = tray_holder.get("tray")
+        if tray:
+            tray.stop()
+        try:
+            root.after(0, root.destroy)
+        except Exception:
+            pass
 
     tray = TrayApp(
         on_toggle_enabled=service.toggle_enabled,
@@ -114,6 +141,7 @@ def main() -> int:
         is_enabled=service.is_enabled,
         is_ocr_all=service.is_ocr_all,
     )
+    tray_holder["tray"] = tray
 
     service.on_result = on_result
     service.on_processing = on_processing
@@ -126,11 +154,32 @@ def main() -> int:
         return 1
 
     log.info(
-        "Ready. Snip with Win+Shift+S. OCR-all-images=%s. Languages: %s",
+        "Ready. Capture with %s (%s). OCR-all-images=%s. Languages: %s",
+        snip_hotkey_hint(),
+        snip_tool_name(),
         service.is_ocr_all(),
         service.engine.available_languages(),
     )
 
+    if IS_MACOS:
+        # pystray/AppKit must own the main thread on macOS.
+        tk_thread = threading.Thread(
+            target=root.mainloop,
+            name="SnipOCRTk",
+            daemon=True,
+        )
+        tk_thread.start()
+        try:
+            tray.run_main_thread()
+        finally:
+            service.stop()
+            try:
+                root.after(0, root.destroy)
+            except Exception:
+                pass
+        return 0
+
+    # Windows (and other): tk mainloop on main thread
     try:
         root.mainloop()
     finally:

@@ -1,11 +1,13 @@
-"""Core orchestration: clipboard image → OCR → clipboard text + UI."""
+"""Core orchestration: clipboard/screenshot image → OCR → clipboard text + UI."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image
@@ -15,6 +17,8 @@ from .clipboard_watcher import ClipboardWatcher
 from .notifications import notify
 from .ocr import create_engine
 from .ocr.base import OCRResult
+from .platform_util import PLATFORM_NAME, snip_hotkey_hint
+from .screenshot_watcher import ScreenshotFolderWatcher
 from .settings import Settings, load_settings, save_settings
 from .snip_detector import SnipDetector
 
@@ -32,11 +36,12 @@ class SnipOCRService:
             language=self.settings.ocr_language,
         )
         self.watcher = ClipboardWatcher(on_update=self._on_clipboard_update)
+        self.folder_watcher: Optional[ScreenshotFolderWatcher] = None
         self._lock = threading.Lock()
-        self._busy = False
         self._last_result: Optional[OCRResult] = None
         self._last_image: Optional[Image.Image] = None
         self._last_seq = 0
+        self._recent_hashes: dict[str, float] = {}
         self._process_poller_stop = threading.Event()
         self._process_poller: Optional[threading.Thread] = None
 
@@ -47,7 +52,7 @@ class SnipOCRService:
 
     def start(self) -> None:
         if not self.engine.ready():
-            msg = self.engine.init_error() or "Windows OCR unavailable"
+            msg = self.engine.init_error() or "OCR engine unavailable"
             logger.error(msg)
             notify("SnipOCR", msg, enabled=True)
 
@@ -59,11 +64,27 @@ class SnipOCRService:
             daemon=True,
         )
         self._process_poller.start()
-        logger.info("SnipOCR service started (enabled=%s)", self.settings.enabled)
+
+        if self.settings.watch_screenshot_folders:
+            self.folder_watcher = ScreenshotFolderWatcher(
+                on_image=self._on_screenshot_file
+            )
+            self.folder_watcher.start()
+
+        logger.info(
+            "SnipOCR service started (platform=%s enabled=%s engine=%s hotkey=%s)",
+            PLATFORM_NAME,
+            self.settings.enabled,
+            getattr(self.engine, "name", self.settings.ocr_engine),
+            snip_hotkey_hint(),
+        )
 
     def stop(self) -> None:
         self._process_poller_stop.set()
         self.watcher.stop()
+        if self.folder_watcher:
+            self.folder_watcher.stop()
+            self.folder_watcher = None
         logger.info("SnipOCR service stopped")
 
     def _poll_snip_processes(self) -> None:
@@ -102,13 +123,31 @@ class SnipOCRService:
         self.watcher.suppress(seconds=0.8, text=text)
         clipboard_io.set_clipboard_text(text)
 
+    def _image_fingerprint(self, image: Image.Image) -> str:
+        # Small fingerprint to de-dupe clipboard + file double delivery
+        thumb = image.copy()
+        thumb.thumbnail((64, 64))
+        raw = thumb.tobytes()
+        return hashlib.sha1(raw).hexdigest()
+
+    def _seen_recently(self, fingerprint: str, window: float = 2.5) -> bool:
+        now = time.monotonic()
+        # prune
+        self._recent_hashes = {
+            k: t for k, t in self._recent_hashes.items() if now - t < 30.0
+        }
+        prev = self._recent_hashes.get(fingerprint)
+        if prev is not None and (now - prev) < window:
+            return True
+        self._recent_hashes[fingerprint] = now
+        return False
+
     def _on_clipboard_update(self) -> None:
         if not self.settings.enabled:
             return
         if self.watcher.is_suppressed():
             return
 
-        # Avoid re-processing pure text pastes we (or the user) made.
         if not clipboard_io.clipboard_has_image():
             return
 
@@ -120,28 +159,66 @@ class SnipOCRService:
         except Exception:
             pass
 
-        # Snipping Tool sometimes fires before image data is fully available.
+        # Capture tools sometimes fire before image data is fully available.
         time.sleep(0.05)
 
         if not self._lock.acquire(blocking=False):
-            logger.debug("OCR already in progress — skip")
+            logger.debug("OCR already in progress — skip clipboard")
             return
 
         thread = threading.Thread(
-            target=self._process_clipboard_image,
+            target=self._process_image_job,
+            kwargs={
+                "source": "clipboard",
+                "from_screenshot_file": False,
+                "filename": "",
+            },
             name="SnipOCRWorker",
             daemon=True,
         )
         thread.start()
 
-    def _process_clipboard_image(self) -> None:
+    def _on_screenshot_file(self, path: Path, image: Image.Image) -> None:
+        if not self.settings.enabled:
+            return
+        if not self._lock.acquire(blocking=False):
+            logger.debug("OCR already in progress — skip file %s", path.name)
+            return
+
+        thread = threading.Thread(
+            target=self._process_image_job,
+            kwargs={
+                "source": "file",
+                "image": image,
+                "from_screenshot_file": True,
+                "filename": path.name,
+            },
+            name="SnipOCRFileWorker",
+            daemon=True,
+        )
+        thread.start()
+
+    def _process_image_job(
+        self,
+        *,
+        source: str,
+        image: Optional[Image.Image] = None,
+        from_screenshot_file: bool = False,
+        filename: str = "",
+    ) -> None:
         try:
             if self.on_processing:
                 self.on_processing(True)
 
-            image = clipboard_io.get_clipboard_image()
             if image is None:
-                logger.debug("No image readable from clipboard")
+                image = clipboard_io.get_clipboard_image()
+            if image is None:
+                logger.debug("No image readable from %s", source)
+                return
+
+            fp = self._image_fingerprint(image)
+            if self._seen_recently(fp):
+                logger.debug("Skipping duplicate image (fingerprint match)")
                 return
 
             w, h = image.size
@@ -151,8 +228,17 @@ class SnipOCRService:
                 image_height=h,
                 min_width=self.settings.min_image_width,
                 min_height=self.settings.min_image_height,
+                from_screenshot_file=from_screenshot_file,
+                filename=filename,
             )
-            logger.info("OCR gate: %s (%s) image=%sx%s", should, reason, w, h)
+            logger.info(
+                "OCR gate: %s (%s) source=%s image=%sx%s",
+                should,
+                reason,
+                source,
+                w,
+                h,
+            )
             if not should:
                 return
 
@@ -205,7 +291,7 @@ class SnipOCRService:
                 enabled=self.settings.show_toast,
             )
         except Exception:
-            logger.exception("Failed to process clipboard image")
+            logger.exception("Failed to process image from %s", source)
             notify("SnipOCR", "OCR failed — see log", enabled=self.settings.show_toast)
         finally:
             if self.on_processing:

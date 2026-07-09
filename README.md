@@ -4,46 +4,71 @@
   <img src="assets/logo.png" alt="SnipOCR logo" width="160" height="160">
 </p>
 
-<p align="center"><strong>SnipOCR</strong> — automatic local OCR for Windows Snipping Tool captures.</p>
+<p align="center"><strong>SnipOCR</strong> — automatic <em>local</em> OCR when you take a screenshot.</p>
 
-Automatic **local OCR** for Windows Snipping Tool captures.
+Works on **Windows** and **macOS**. When you capture the screen, SnipOCR:
 
-1. Press **Win+Shift+S** and snip text on screen  
-2. SnipOCR reads the clipboard image  
-3. Runs **Windows.Media.Ocr** offline on your PC  
-4. Puts the text on your clipboard and shows a popup  
+1. Detects the new screenshot (clipboard and/or screenshot folder)
+2. Runs **on-device OCR** (no cloud)
+3. Puts the text on your clipboard
+4. Shows a popup so you can review / edit / re-copy
 
-No cloud APIs. Everything stays on your device.
+---
+
+## Platforms
+
+| | Windows | macOS |
+|--|---------|--------|
+| **Capture** | Snipping Tool (`Win+Shift+S`) | Screenshot (`⌘⇧4`, `⌘⌃⇧4` for clipboard) |
+| **OCR engine** | Windows.Media.Ocr | Apple Vision |
+| **Clipboard** | win32 clipboard listener | Pasteboard changeCount poll |
+| **File saves** | `Pictures\Screenshots` | Desktop / `Pictures/Screenshots` |
+| **Config** | `%APPDATA%\SnipOCR\` | `~/Library/Application Support/SnipOCR/` |
+| **Logs** | `%LOCALAPPDATA%\SnipOCR\` | `~/Library/Logs/SnipOCR/` |
+
+Both engines are **fully offline** after install.
+
+---
 
 ## Requirements
 
-- Windows 10/11  
-- Python 3.11+  
-- A Windows **OCR language pack** (usually `en-US` is already installed)
+- **Python 3.11+**
+- **Windows 10/11** *or* **macOS 12+** (Vision framework)
+- Platform OCR support:
+  - Windows: OCR language pack (usually `en-US` already installed)
+  - macOS: built-in Vision (no extra language pack step for English)
 
-### Check / install OCR language packs
+### Windows — OCR language packs
 
 Open **Windows PowerShell as Administrator**:
 
 ```powershell
 Get-WindowsCapability -Online | Where-Object { $_.Name -Like 'Language.OCR*' }
 
-# Install English (US) if missing:
 Get-WindowsCapability -Online |
   Where-Object { $_.Name -Like 'Language.OCR*en-US*' } |
   Add-WindowsCapability -Online
 ```
 
-Or run:
+Or:
 
 ```powershell
 .\scripts\install_ocr_lang.ps1 -Language en-US
 ```
 
+### macOS — Accessibility / notifications (optional)
+
+- Screen Recording permission is **not** required; SnipOCR only reads the **clipboard** and screenshot **files** you already captured.
+- Notifications use `osascript` (standard user notification).
+
+---
+
 ## Quick start
 
+### Windows
+
 ```powershell
-cd C:\Users\david\Laboratory\snipocr
+cd path\to\snipocr
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -56,62 +81,100 @@ Or:
 .\scripts\run.ps1
 ```
 
-A tray icon appears. Snip something with **Win+Shift+S** — text is OCR’d and copied.
+### macOS
+
+```bash
+cd path/to/snipocr
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+Or:
+
+```bash
+chmod +x scripts/run.sh
+./scripts/run.sh
+```
+
+A tray / menu-bar icon appears. Take a screenshot — text is OCR’d and copied.
+
+**macOS tip:** hold **Control** while capturing (`⌘⌃⇧4`) to put the snip on the clipboard directly. File-based captures on Desktop are also watched.
+
+---
 
 ## Tray menu
 
 | Action | What it does |
 |--------|----------------|
 | **Enable / Disable SnipOCR** | Master switch |
-| **Enable OCR all images** | OCR *any* clipboard image (not only Snipping Tool) |
+| **Enable OCR all images** | OCR *any* clipboard image (not only screenshot tools) |
 | **Show last result** | Re-open the last OCR popup |
 | **Quit** | Exit |
 
-## How snip detection works
+---
 
-By default SnipOCR only OCRs clipboard images when **Snipping Tool / ScreenClippingHost** was recently active. That avoids OCR-ing random images you copy from a browser.
+## How detection works
+
+By default SnipOCR only OCRs images when:
+
+1. A screenshot process was recently active  
+   (Windows: `ScreenClippingHost` / Snipping Tool · macOS: `screencapture` / Screenshot), **or**
+2. A new screenshot-like file appears in a known folder, **or**
+3. (Windows) the clipboard owner is a snipping process
+
+That avoids OCR-ing random images you copy from a browser.
 
 Turn on **OCR all images** from the tray if you want every clipboard image processed.
+
+Clipboard + file paths are de-duplicated so the same snip is not OCR’d twice.
+
+---
 
 ## Settings
 
 Stored at:
 
-```
-%APPDATA%\SnipOCR\config.json
-```
-
-Useful keys:
+| Platform | Path |
+|----------|------|
+| Windows | `%APPDATA%\SnipOCR\config.json` |
+| macOS | `~/Library/Application Support/SnipOCR/config.json` |
 
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `true` | Master switch |
-| `ocr_language` | `en-US` | Windows OCR language tag |
+| `ocr_engine` | `auto` | `auto` / `windows` / `macos` |
+| `ocr_language` | `en-US` | Preferred recognition language |
 | `replace_clipboard_with_text` | `true` | Put OCR text on clipboard |
 | `ocr_all_clipboard_images` | `false` | Skip snip-process filter |
+| `watch_screenshot_folders` | `true` | Watch Desktop / Screenshots folders |
 | `show_popup` | `true` | Show result window |
-| `popup_autohide_seconds` | `8` | Auto-hide popup (0 = stay) |
-| `show_toast` | `true` | Toast notifications |
+| `popup_autohide_seconds` | `8` | Auto-hide popup (`0` = stay) |
+| `show_toast` | `true` | Desktop notifications |
 
 Logs:
 
-```
-%LOCALAPPDATA%\SnipOCR\snipocr.log
-```
+| Platform | Path |
+|----------|------|
+| Windows | `%LOCALAPPDATA%\SnipOCR\snipocr.log` |
+| macOS | `~/Library/Logs/SnipOCR/snipocr.log` |
+
+---
 
 ## Project layout
 
 ```
 snipocr/
   main.py
-  assets/
-    logo.png          # master brand mark (black + geometric)
-    logo.ico          # Windows tray / window icon
-    logo-*.png        # sized exports
-    icon-*.png
+  assets/                 # brand logo + icons
   app/
-    clipboard_io.py
+    platform_util.py      # OS detection, paths, hints
+    clipboard_io.py       # cross-platform facade
+    clipboard_io_win.py
+    clipboard_io_mac.py
     clipboard_watcher.py
+    screenshot_watcher.py
     snip_detector.py
     service.py
     result_ui.py
@@ -120,17 +183,22 @@ snipocr/
     notifications.py
     paths.py
     ocr/
-      windows_ocr.py
+      windows_ocr.py      # Windows.Media.Ocr
+      macos_ocr.py        # Apple Vision
   scripts/
     run.ps1
+    run.sh
     install_ocr_lang.ps1
     generate_logo.py
 ```
 
+---
+
 ## Troubleshooting
 
-**No text / “No Windows OCR engine”**  
-Install the OCR language pack (see above). Confirm languages:
+### Windows — “No Windows OCR engine”
+
+Install the OCR language pack (see above). Confirm:
 
 ```powershell
 # Windows PowerShell 5.x
@@ -138,20 +206,33 @@ Install the OCR language pack (see above). Confirm languages:
 [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages
 ```
 
-**Snips do nothing**  
-- Is the tray icon enabled?  
-- Did you snip with Snipping Tool (`Win+Shift+S`)?  
-- Try **Enable OCR all images** once to test the OCR path.  
-- Check `%LOCALAPPDATA%\SnipOCR\snipocr.log`
+### macOS — Vision import errors
 
-**Clipboard still has the image**  
+```bash
+pip install 'pyobjc-framework-Vision' 'pyobjc-framework-Quartz' 'pyobjc-framework-Cocoa'
+```
+
+### Snips do nothing
+
+- Is the tray icon enabled?
+- Did you use the OS screenshot tool?
+- Try **Enable OCR all images** once to test the OCR path.
+- Check the log file paths above.
+- On macOS, prefer `⌘⌃⇧4` (clipboard) or ensure Desktop/Screenshots is writable.
+
+### Clipboard still has the image
+
 If no text was found, the image is left on the clipboard on purpose.
+
+---
 
 ## Privacy
 
-- OCR runs locally via Windows.Media.Ocr  
-- No network calls in the default path  
+- OCR runs locally (Windows.Media.Ocr or Apple Vision)
+- No network calls in the default path
 - OCR text is not written to disk by default (only logs metadata)
+
+---
 
 ## License
 

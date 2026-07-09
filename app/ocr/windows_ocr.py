@@ -89,7 +89,21 @@ class WindowsOCREngine:
             raise RuntimeError(self._init_error or "Windows OCR not available")
 
         started = time.perf_counter()
-        text = asyncio.run(self._recognize_async(image))
+        # Worker threads may already have an event loop policy; isolate safely.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Should not happen in our worker design; fall back to new loop in thread.
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                text = pool.submit(lambda: asyncio.run(self._recognize_async(image))).result()
+        else:
+            text = asyncio.run(self._recognize_async(image))
+
         duration_ms = (time.perf_counter() - started) * 1000.0
         return OCRResult(
             text=text,
@@ -99,8 +113,13 @@ class WindowsOCREngine:
         )
 
     async def _recognize_async(self, image: Image.Image) -> str:
-        from winrt.windows.graphics.imaging import BitmapDecoder
-        from winrt.windows.storage.streams import InMemoryRandomAccessStream
+        from winrt.windows.graphics.imaging import (
+            BitmapAlphaMode,
+            BitmapDecoder,
+            BitmapPixelFormat,
+            SoftwareBitmap,
+        )
+        from winrt.windows.storage.streams import DataWriter, InMemoryRandomAccessStream
 
         image = _downscale(image.convert("RGB"))
         buf = io.BytesIO()
@@ -108,11 +127,7 @@ class WindowsOCREngine:
         png_bytes = buf.getvalue()
 
         stream = InMemoryRandomAccessStream()
-        # Write PNG bytes into the WinRT stream
         writer = stream.get_output_stream_at(0)
-        # Use DataWriter for reliable write
-        from winrt.windows.storage.streams import DataWriter
-
         data_writer = DataWriter(writer)
         data_writer.write_bytes(png_bytes)
         await data_writer.store_async()
@@ -122,13 +137,6 @@ class WindowsOCREngine:
 
         decoder = await BitmapDecoder.create_async(stream)
         bitmap = await decoder.get_software_bitmap_async()
-
-        # OCR prefers Gray8 or Bgra8; convert if needed
-        from winrt.windows.graphics.imaging import (
-            BitmapPixelFormat,
-            BitmapAlphaMode,
-            SoftwareBitmap,
-        )
 
         if bitmap.bitmap_pixel_format != BitmapPixelFormat.BGRA8:
             bitmap = SoftwareBitmap.convert(
@@ -143,9 +151,3 @@ class WindowsOCREngine:
 
         lines = [line.text for line in result.lines]
         return "\n".join(lines).strip()
-
-
-def create_engine(engine_name: str = "windows", language: str = "en-US") -> WindowsOCREngine:
-    if engine_name not in ("windows", "windows_ocr", "win"):
-        logger.warning("Unknown engine %r — falling back to Windows OCR", engine_name)
-    return WindowsOCREngine(language=language)

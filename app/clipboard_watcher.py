@@ -1,47 +1,35 @@
-"""Win32 clipboard format listener (AddClipboardFormatListener)."""
+"""Cross-platform clipboard change watcher."""
 
 from __future__ import annotations
 
-import ctypes
 import logging
 import threading
 import time
-from ctypes import wintypes
 from typing import Callable, Optional
 
-import win32api
-import win32con
-import win32gui
+from .platform_util import IS_MACOS, IS_WINDOWS
 
 logger = logging.getLogger(__name__)
-
-WM_CLIPBOARDUPDATE = 0x031D
-HWND_MESSAGE = -3
-
-user32 = ctypes.windll.user32
-user32.AddClipboardFormatListener.argtypes = [wintypes.HWND]
-user32.AddClipboardFormatListener.restype = wintypes.BOOL
-user32.RemoveClipboardFormatListener.argtypes = [wintypes.HWND]
-user32.RemoveClipboardFormatListener.restype = wintypes.BOOL
 
 
 class ClipboardWatcher:
     """
-    Runs a hidden message-only window on a background thread and invokes
-    `on_update` whenever the clipboard contents change.
+    Invokes `on_update` whenever the clipboard contents change.
+
+    Windows: AddClipboardFormatListener message window.
+    macOS / other: poll pasteboard changeCount / sequence number.
     """
 
     def __init__(self, on_update: Callable[[], None]) -> None:
         self._on_update = on_update
         self._thread: Optional[threading.Thread] = None
-        self._hwnd: Optional[int] = None
         self._ready = threading.Event()
         self._stop = threading.Event()
         self._suppress_until = 0.0
         self._last_text_we_set: Optional[str] = None
+        self._impl_stop: Optional[Callable[[], None]] = None
 
     def suppress(self, seconds: float = 0.6, text: Optional[str] = None) -> None:
-        """Ignore clipboard updates we cause ourselves when writing OCR text."""
         self._suppress_until = time.monotonic() + seconds
         if text is not None:
             self._last_text_we_set = text
@@ -56,30 +44,67 @@ class ClipboardWatcher:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="ClipboardWatcher",
-            daemon=True,
-        )
+        target = self._run_windows if IS_WINDOWS else self._run_poll
+        self._thread = threading.Thread(target=target, name="ClipboardWatcher", daemon=True)
         self._thread.start()
         if not self._ready.wait(timeout=5.0):
             raise RuntimeError("Clipboard watcher failed to start")
 
     def stop(self) -> None:
         self._stop.set()
-        hwnd = self._hwnd
-        if hwnd:
+        if self._impl_stop:
             try:
-                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                self._impl_stop()
             except Exception:
                 pass
         if self._thread:
             self._thread.join(timeout=3.0)
             self._thread = None
 
-    def _run(self) -> None:
+    def _fire(self) -> None:
+        if self.is_suppressed():
+            logger.debug("Ignoring clipboard update (suppressed)")
+            return
+        try:
+            self._on_update()
+        except Exception:
+            logger.exception("Error handling clipboard update")
+
+    # ── Windows native listener ──────────────────────────────────────────
+
+    def _run_windows(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        import win32api
+        import win32con
+        import win32gui
+
+        wm_clipboardupdate = 0x031D
+        hwnd_message = -3
+
+        user32 = ctypes.windll.user32
+        user32.AddClipboardFormatListener.argtypes = [wintypes.HWND]
+        user32.AddClipboardFormatListener.restype = wintypes.BOOL
+        user32.RemoveClipboardFormatListener.argtypes = [wintypes.HWND]
+        user32.RemoveClipboardFormatListener.restype = wintypes.BOOL
+
+        hwnd_holder: dict[str, int] = {}
+
+        def wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == wm_clipboardupdate:
+                self._fire()
+                return 0
+            if msg == win32con.WM_CLOSE:
+                win32gui.DestroyWindow(hwnd)
+                return 0
+            if msg == win32con.WM_DESTROY:
+                win32gui.PostQuitMessage(0)
+                return 0
+            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
         wc = win32gui.WNDCLASS()
-        wc.lpfnWndProc = self._wnd_proc
+        wc.lpfnWndProc = wnd_proc
         wc.lpszClassName = f"SnipOCRClipboardListener_{id(self)}_{time.time_ns()}"
         wc.hInstance = win32api.GetModuleHandle(None)
         class_atom = win32gui.RegisterClass(wc)
@@ -92,20 +117,26 @@ class ClipboardWatcher:
             0,
             0,
             0,
-            HWND_MESSAGE,
+            hwnd_message,
             0,
             wc.hInstance,
             None,
         )
-        self._hwnd = hwnd
+        hwnd_holder["hwnd"] = hwnd
 
         if not user32.AddClipboardFormatListener(hwnd):
-            err = ctypes.get_last_error()
-            logger.error("AddClipboardFormatListener failed (err=%s)", err)
+            logger.error("AddClipboardFormatListener failed")
             self._ready.set()
             return
 
-        logger.info("Clipboard listener active (hwnd=%s)", hwnd)
+        def _stop_impl() -> None:
+            try:
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            except Exception:
+                pass
+
+        self._impl_stop = _stop_impl
+        logger.info("Clipboard listener active (Windows hwnd=%s)", hwnd)
         self._ready.set()
 
         try:
@@ -127,23 +158,30 @@ class ClipboardWatcher:
                 win32gui.UnregisterClass(wc.lpszClassName, wc.hInstance)
             except Exception:
                 pass
-            self._hwnd = None
             logger.info("Clipboard listener stopped")
 
-    def _wnd_proc(self, hwnd, msg, wparam, lparam):
-        if msg == WM_CLIPBOARDUPDATE:
-            if self.is_suppressed():
-                logger.debug("Ignoring clipboard update (suppressed)")
-                return 0
+    # ── macOS / generic poll ─────────────────────────────────────────────
+
+    def _run_poll(self) -> None:
+        from . import clipboard_io
+
+        try:
+            last = clipboard_io.get_clipboard_sequence_number()
+        except Exception:
+            last = -1
+
+        platform = "macOS" if IS_MACOS else "poll"
+        logger.info("Clipboard listener active (%s poll)", platform)
+        self._ready.set()
+
+        while not self._stop.is_set():
             try:
-                self._on_update()
+                seq = clipboard_io.get_clipboard_sequence_number()
+                if seq != last:
+                    last = seq
+                    self._fire()
             except Exception:
-                logger.exception("Error handling clipboard update")
-            return 0
-        if msg == win32con.WM_CLOSE:
-            win32gui.DestroyWindow(hwnd)
-            return 0
-        if msg == win32con.WM_DESTROY:
-            win32gui.PostQuitMessage(0)
-            return 0
-        return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+                logger.exception("Clipboard poll error")
+            self._stop.wait(0.25)
+
+        logger.info("Clipboard listener stopped")

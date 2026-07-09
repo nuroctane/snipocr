@@ -1,15 +1,15 @@
-"""System tray icon and menu."""
+"""System tray / menu-bar icon and menu (Windows + macOS)."""
 
 from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 from typing import Callable, Optional
 
 from PIL import Image, ImageDraw, ImageEnhance
 
 from .paths import logo_png
+from .platform_util import IS_MACOS
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,6 @@ def _load_tray_icon(*, processing: bool = False, disabled: bool = False) -> Imag
         img = _fallback_icon()
 
     if processing:
-        # Warm the blue accents slightly so the tray shows activity.
         overlay = Image.new("RGBA", img.size, (245, 166, 35, 48))
         img = Image.alpha_composite(img, overlay)
     elif disabled:
@@ -67,7 +66,7 @@ class TrayApp:
         self._thread: Optional[threading.Thread] = None
         self._processing = False
 
-    def start(self) -> None:
+    def _build_icon(self):
         import pystray
         from pystray import MenuItem as Item
 
@@ -94,12 +93,34 @@ class TrayApp:
             "SnipOCR — listening for snips",
             menu,
         )
+        return self._icon
+
+    def start(self) -> None:
+        """
+        Start the tray icon.
+
+        On Windows the icon runs on a daemon thread (tk owns the main thread).
+        On macOS call `run_main_thread()` instead so AppKit owns the main thread.
+        """
+        if IS_MACOS:
+            # Icon is built later on the main thread via run_main_thread().
+            self._build_icon()
+            return
+
+        self._build_icon()
         self._thread = threading.Thread(
             target=self._icon.run,
             name="SnipOCRTray",
             daemon=True,
         )
         self._thread.start()
+
+    def run_main_thread(self) -> None:
+        """Block on the main thread running the menu-bar icon (macOS)."""
+        if self._icon is None:
+            self._build_icon()
+        assert self._icon is not None
+        self._icon.run()
 
     def stop(self) -> None:
         if self._icon:

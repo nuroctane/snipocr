@@ -1,13 +1,22 @@
-pywin32>=306
+# Core (all platforms)
 Pillow>=10.0.0
 pystray>=0.19.5
 psutil>=5.9.0
-winotify>=1.1.0
-winrt-runtime>=3.0.0
-winrt-Windows.Foundation>=3.0.0
-winrt-Windows.Foundation.Collections>=3.0.0
-winrt-Windows.Globalization>=3.0.0
-winrt-Windows.Graphics.Imaging>=3.0.0
-winrt-Windows.Media.Ocr>=3.0.0
-winrt-Windows.Storage>=3.0.0
-winrt-Windows.Storage.Streams>=3.0.0
+
+# Windows
+pywin32>=306; sys_platform == "win32"
+winotify>=1.1.0; sys_platform == "win32"
+winrt-runtime>=3.0.0; sys_platform == "win32"
+winrt-Windows.Foundation>=3.0.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=3.0.0; sys_platform == "win32"
+winrt-Windows.Globalization>=3.0.0; sys_platform == "win32"
+winrt-Windows.Graphics.Imaging>=3.0.0; sys_platform == "win32"
+winrt-Windows.Media.Ocr>=3.0.0; sys_platform == "win32"
+winrt-Windows.Storage>=3.0.0; sys_platform == "win32"
+winrt-Windows.Storage.Streams>=3.0.0; sys_platform == "win32"
+
+# macOS (local Vision OCR + pasteboard + menu bar)
+pyobjc-core>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"

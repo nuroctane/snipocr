@@ -10,6 +10,7 @@ from typing import Callable, Optional
 from PIL import Image, ImageTk
 
 from .paths import logo_ico, logo_png
+from .platform_util import IS_WINDOWS, ui_font_family
 
 logger = logging.getLogger(__name__)
 
@@ -129,13 +130,14 @@ class ResultPopup:
             self._win.withdraw()
 
     def _apply_window_icon(self, win: tk.Toplevel | tk.Tk) -> None:
-        ico = logo_ico()
         png = logo_png(32)
-        try:
-            if ico.exists():
-                win.iconbitmap(default=str(ico))
-        except Exception:
-            pass
+        if IS_WINDOWS:
+            ico = logo_ico()
+            try:
+                if ico.exists():
+                    win.iconbitmap(default=str(ico))
+            except Exception:
+                pass
         try:
             if png.exists():
                 self._logo_photo = ImageTk.PhotoImage(Image.open(png))
@@ -164,14 +166,15 @@ class ResultPopup:
             ttk.Label(header, image=self._header_logo).pack(side=tk.LEFT, padx=(0, 8))
         except Exception:
             self._header_logo = None  # type: ignore[assignment]
-        ttk.Label(header, text="SnipOCR", font=("Segoe UI", 11, "bold")).pack(
+        font_family = ui_font_family()
+        ttk.Label(header, text="SnipOCR", font=(font_family, 11, "bold")).pack(
             side=tk.LEFT
         )
 
         self._thumb_label = ttk.Label(frame)
         self._thumb_label.pack(anchor=tk.W, pady=(0, 6))
 
-        self._text = tk.Text(frame, wrap=tk.WORD, height=12, font=("Segoe UI", 10))
+        self._text = tk.Text(frame, wrap=tk.WORD, height=12, font=(font_family, 10))
         self._text.pack(fill=tk.BOTH, expand=True)
 
         btn_row = ttk.Frame(frame)

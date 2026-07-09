@@ -1,17 +1,17 @@
-"""Load and save SnipOCR settings from %APPDATA%\\SnipOCR\\config.json."""
+"""Load and save SnipOCR settings (cross-platform config dir)."""
 
 from __future__ import annotations
 
 import json
-import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from .platform_util import config_dir, default_ocr_engine
 
 DEFAULTS = {
     "enabled": True,
-    "ocr_engine": "windows",
+    "ocr_engine": "auto",
     "ocr_language": "en-US",
     "replace_clipboard_with_text": True,
     "ocr_all_clipboard_images": False,
@@ -20,17 +20,11 @@ DEFAULTS = {
     "show_toast": True,
     "min_image_width": 32,
     "min_image_height": 32,
-    "startup_with_windows": False,
+    "startup_with_windows": False,  # kept for backward compat; Windows only
+    "watch_screenshot_folders": True,
     "collapse_single_newlines": False,
     "snip_process_window_seconds": 4.0,
 }
-
-
-def config_dir() -> Path:
-    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
-    path = Path(base) / "SnipOCR"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def config_path() -> Path:
@@ -40,7 +34,7 @@ def config_path() -> Path:
 @dataclass
 class Settings:
     enabled: bool = True
-    ocr_engine: str = "windows"
+    ocr_engine: str = "auto"
     ocr_language: str = "en-US"
     replace_clipboard_with_text: bool = True
     ocr_all_clipboard_images: bool = False
@@ -50,6 +44,7 @@ class Settings:
     min_image_width: int = 32
     min_image_height: int = 32
     startup_with_windows: bool = False
+    watch_screenshot_folders: bool = True
     collapse_single_newlines: bool = False
     snip_process_window_seconds: float = 4.0
 
@@ -60,13 +55,18 @@ class Settings:
     def from_dict(cls, data: dict) -> "Settings":
         known = {f.name for f in fields(cls)}
         kwargs = {k: v for k, v in data.items() if k in known}
+        # Migrate legacy default "windows" stored on non-Windows configs
+        if kwargs.get("ocr_engine") == "windows" and default_ocr_engine() != "windows":
+            # Only auto-migrate if this is clearly a stale default without user intent —
+            # leave explicit "windows" if user set it; migration of pure defaults handled in load.
+            pass
         return cls(**kwargs)
 
 
 def load_settings() -> Settings:
     path = config_path()
     if not path.exists():
-        settings = Settings()
+        settings = Settings(ocr_engine="auto")
         save_settings(settings)
         return settings
     try:
