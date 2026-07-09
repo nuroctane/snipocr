@@ -20,25 +20,51 @@ Works on **Windows** and **macOS**. When you capture the screen, SnipOCR:
 | | Windows | macOS |
 |--|---------|--------|
 | **Capture** | Snipping Tool (`Win+Shift+S`) | Screenshot (`⌘⇧4`, `⌘⌃⇧4` for clipboard) |
-| **OCR engine** | Windows.Media.Ocr | Apple Vision |
+| **OS OCR** | Windows.Media.Ocr | Apple Vision |
+| **Neural OCR** | RapidOCR + ONNX Runtime (same on both) | RapidOCR + ONNX Runtime |
 | **Clipboard** | win32 clipboard listener | Pasteboard changeCount poll |
 | **File saves** | `Pictures\Screenshots` | Desktop / `Pictures/Screenshots` |
 | **Config** | `%APPDATA%\SnipOCR\` | `~/Library/Application Support/SnipOCR/` |
 | **Logs** | `%LOCALAPPDATA%\SnipOCR\` | `~/Library/Logs/SnipOCR/` |
 
-Both engines are **fully offline** after install.
+All engines are **fully offline** after install (RapidOCR downloads ONNX models once on first use).
+
+---
+
+## OCR engines
+
+SnipOCR supports three backends:
+
+| Engine id | Name | Platform | Notes |
+|-----------|------|----------|--------|
+| `auto` | OS default | Win / Mac | Windows OCR or Apple Vision |
+| `windows` | Windows OCR | Windows | Language packs via Windows Capability |
+| `macos` | macOS Vision | macOS | Built-in Vision framework |
+| **`rapid`** | **RapidOCR (ONNX)** | **Win + Mac (+ Linux)** | Light PP-OCR models via ONNX Runtime |
+
+### When to use RapidOCR
+
+- Same quality/behavior on Windows **and** macOS
+- No Windows OCR language-pack setup
+- Strong multi-language recognition (Chinese, Japanese, Korean, Latin, Arabic, …)
+- Optional acceleration: DirectML (Windows), CoreML (macOS), CUDA (NVIDIA)
+
+OS engines remain the lightest install path for pure English UI snips.
 
 ---
 
 ## Requirements
 
 - **Python 3.11+**
-- **Windows 10/11** *or* **macOS 12+** (Vision framework)
-- Platform OCR support:
+- **Windows 10/11** *or* **macOS 12+**
+- Platform OCR (optional if you only use RapidOCR):
   - Windows: OCR language pack (usually `en-US` already installed)
-  - macOS: built-in Vision (no extra language pack step for English)
+  - macOS: built-in Vision
+- RapidOCR (recommended for cross-platform AI OCR):
+  - `rapidocr` + `onnxruntime` (installed via `requirements.txt`)
+  - First run downloads small ONNX models (~10–20 MB typical)
 
-### Windows — OCR language packs
+### Windows — OCR language packs (OS engine only)
 
 Open **Windows PowerShell as Administrator**:
 
@@ -60,6 +86,28 @@ Or:
 
 - Screen Recording permission is **not** required; SnipOCR only reads the **clipboard** and screenshot **files** you already captured.
 - Notifications use `osascript` (standard user notification).
+
+### Optional GPU acceleration (RapidOCR)
+
+```powershell
+# Windows — DirectML (many AMD/Intel/NVIDIA GPUs)
+pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+pip install onnxruntime-directml
+
+# NVIDIA CUDA (any OS with a matching CUDA toolkit)
+pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+pip install onnxruntime-gpu
+```
+
+macOS: the standard `onnxruntime` wheel may expose **CoreML**. Leave `rapidocr_accel` on `auto`.
+
+Then set in config (or tray → **RapidOCR acceleration**):
+
+```json
+"rapidocr_accel": "dml"
+```
+
+or `"coreml"` / `"cuda"` / `"cpu"`.
 
 ---
 
@@ -102,6 +150,23 @@ A tray / menu-bar icon appears. Take a screenshot — text is OCR’d and copied
 
 **macOS tip:** hold **Control** while capturing (`⌘⌃⇧4`) to put the snip on the clipboard directly. File-based captures on Desktop are also watched.
 
+### Switch to RapidOCR
+
+1. Tray → **OCR engine** → **RapidOCR (ONNX)**  
+2. Or edit config:
+
+```json
+"ocr_engine": "rapid"
+```
+
+First recognition may download models (one-time). Subsequent snips stay local and fast.
+
+Optional: pre-download default models:
+
+```bash
+rapidocr download_models
+```
+
 ---
 
 ## Tray menu
@@ -111,6 +176,9 @@ A tray / menu-bar icon appears. Take a screenshot — text is OCR’d and copied
 | **Enable / Disable SnipOCR** | Master switch |
 | **Enable OCR all images** | OCR *any* clipboard image (not only screenshot tools) |
 | **Show last result** | Re-open the last OCR popup |
+| **OCR engine** | Radio: OS default / Windows or Vision / **RapidOCR (ONNX)** |
+| **RapidOCR model** | Auto / Small / Mobile / Server / Tiny |
+| **RapidOCR acceleration** | Auto / CPU / CoreML / DirectML / CUDA |
 | **Quit** | Exit |
 
 ---
@@ -141,17 +209,75 @@ Stored at:
 | Windows | `%APPDATA%\SnipOCR\config.json` |
 | macOS | `~/Library/Application Support/SnipOCR/config.json` |
 
+### Core
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `true` | Master switch |
-| `ocr_engine` | `auto` | `auto` / `windows` / `macos` |
-| `ocr_language` | `en-US` | Preferred recognition language |
+| `ocr_engine` | `auto` | `auto` / `windows` / `macos` / **`rapid`** |
+| `ocr_language` | `en-US` | Preferred language (BCP-47 or RapidOCR alias) |
 | `replace_clipboard_with_text` | `true` | Put OCR text on clipboard |
 | `ocr_all_clipboard_images` | `false` | Skip snip-process filter |
 | `watch_screenshot_folders` | `true` | Watch Desktop / Screenshots folders |
 | `show_popup` | `true` | Show result window |
 | `popup_autohide_seconds` | `8` | Auto-hide popup (`0` = stay) |
 | `show_toast` | `true` | Desktop notifications |
+| `collapse_single_newlines` | `false` | Join soft line breaks into spaces |
+
+### RapidOCR (when `ocr_engine` is `rapid`)
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `rapidocr_model_type` | `auto` | `auto` / `small` / `mobile` / `server` / `tiny` |
+| `rapidocr_ocr_version` | `auto` | `auto` / `PP-OCRv6` / `PP-OCRv5` / `PP-OCRv4` |
+| `rapidocr_use_cls` | `true` | Run text-line orientation classifier |
+| `rapidocr_text_score` | `0.5` | Drop lines below this confidence |
+| `rapidocr_accel` | `auto` | `auto` / `cpu` / `dml` / `coreml` / `cuda` |
+| `rapidocr_intra_op_threads` | `-1` | ONNX Runtime intra-op threads (`-1` = library default) |
+| `rapidocr_inter_op_threads` | `-1` | ONNX Runtime inter-op threads |
+
+**Model tips**
+
+| Preset | Typical use |
+|--------|-------------|
+| `auto` | English → mobile PP-OCRv4; otherwise small PP-OCRv6 (fast multi-lang) |
+| `small` | Default modern path (PP-OCRv6 small when available) |
+| `mobile` | Smaller / older mobile models |
+| `server` | Heavier, higher accuracy |
+| `tiny` | Experimental; may fall back if unsupported for your language |
+
+**Language mapping** (`ocr_language` → RapidOCR)
+
+| Examples | RapidOCR rec model |
+|----------|-------------------|
+| `en`, `en-US` | `en` |
+| `zh-CN`, `zh` | `ch` (Chinese + often English) |
+| `zh-TW`, `zh-HK` | `chinese_cht` |
+| `ja`, `ja-JP` | `japan` |
+| `ko`, `ko-KR` | `korean` |
+| `de`, `fr`, `es`, `pt`, … | `latin` |
+| `ru`, `uk`, … | `cyrillic` |
+| `ar`, `hi`, `th`, `el`, … | matching script models |
+
+If a language + model combo is unavailable, SnipOCR automatically falls back to a working combination.
+
+Example config for cross-platform neural OCR:
+
+```json
+{
+  "enabled": true,
+  "ocr_engine": "rapid",
+  "ocr_language": "en-US",
+  "rapidocr_model_type": "auto",
+  "rapidocr_ocr_version": "auto",
+  "rapidocr_use_cls": true,
+  "rapidocr_text_score": 0.5,
+  "rapidocr_accel": "auto",
+  "replace_clipboard_with_text": true,
+  "show_popup": true,
+  "show_toast": true
+}
+```
 
 Logs:
 
@@ -183,8 +309,10 @@ snipocr/
     notifications.py
     paths.py
     ocr/
+      base.py             # OCREngine protocol + OCRResult
       windows_ocr.py      # Windows.Media.Ocr
       macos_ocr.py        # Apple Vision
+      rapid_ocr.py        # RapidOCR + ONNX Runtime
   scripts/
     run.ps1
     run.sh
@@ -206,11 +334,35 @@ Install the OCR language pack (see above). Confirm:
 [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages
 ```
 
+Or switch to RapidOCR: tray → **OCR engine** → **RapidOCR (ONNX)**.
+
 ### macOS — Vision import errors
 
 ```bash
 pip install 'pyobjc-framework-Vision' 'pyobjc-framework-Quartz' 'pyobjc-framework-Cocoa'
 ```
+
+### RapidOCR — “not installed” / import errors
+
+```bash
+pip install -U rapidocr onnxruntime
+```
+
+First use needs network once to download models (ModelScope CDN). After that, fully offline.
+
+Pre-download:
+
+```bash
+rapidocr download_models
+rapidocr check
+```
+
+### RapidOCR is slow on first snip
+
+- Cold start loads ONNX sessions; later snips are much faster.
+- Prefer `rapidocr_model_type: "auto"` or `"small"`.
+- Enable GPU EP if available (`dml` / `coreml` / `cuda`).
+- Huge screenshots are downscaled (max side 2000 px).
 
 ### Snips do nothing
 
@@ -228,8 +380,9 @@ If no text was found, the image is left on the clipboard on purpose.
 
 ## Privacy
 
-- OCR runs locally (Windows.Media.Ocr or Apple Vision)
-- No network calls in the default path
+- OCR runs locally (Windows.Media.Ocr, Apple Vision, or RapidOCR/ONNX)
+- No cloud OCR API in the default path
+- RapidOCR may download model weights once from RapidAI/ModelScope on first use
 - OCR text is not written to disk by default (only logs metadata)
 
 ---

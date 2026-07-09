@@ -140,6 +140,12 @@ def main() -> int:
         on_quit=on_quit,
         is_enabled=service.is_enabled,
         is_ocr_all=service.is_ocr_all,
+        get_ocr_engine=service.get_ocr_engine,
+        set_ocr_engine=service.set_ocr_engine,
+        get_rapidocr_model_type=service.get_rapidocr_model_type,
+        set_rapidocr_model_type=service.set_rapidocr_model_type,
+        get_rapidocr_accel=service.get_rapidocr_accel,
+        set_rapidocr_accel=service.set_rapidocr_accel,
     )
     tray_holder["tray"] = tray
 
@@ -153,10 +159,25 @@ def main() -> int:
         log.exception("Failed to start")
         return 1
 
+    eng_name = getattr(service.engine, "name", service.get_ocr_engine())
+    resolved = ""
+    if hasattr(service.engine, "resolved_config"):
+        try:
+            cfg = service.engine.resolved_config()
+            if cfg:
+                resolved = (
+                    f" rapid={cfg.get('rec_model')}/{cfg.get('rec_version')}"
+                    f" lang={cfg.get('lang_rec')} accel={cfg.get('accel')}"
+                )
+        except Exception:
+            pass
     log.info(
-        "Ready. Capture with %s (%s). OCR-all-images=%s. Languages: %s",
+        "Ready. Capture with %s (%s). engine=%s (%s)%s OCR-all=%s langs=%s",
         snip_hotkey_hint(),
         snip_tool_name(),
+        service.get_ocr_engine(),
+        eng_name,
+        resolved,
         service.is_ocr_all(),
         service.engine.available_languages(),
     )

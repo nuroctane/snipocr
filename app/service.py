@@ -15,8 +15,13 @@ from PIL import Image
 from . import clipboard_io
 from .clipboard_watcher import ClipboardWatcher
 from .notifications import notify
-from .ocr import create_engine
+from .ocr import (
+    create_engine_from_settings,
+    engine_display_name,
+    normalize_engine_name,
+)
 from .ocr.base import OCRResult
+from .ocr.rapid_ocr import MODEL_PRESETS
 from .platform_util import PLATFORM_NAME, snip_hotkey_hint
 from .screenshot_watcher import ScreenshotFolderWatcher
 from .settings import Settings, load_settings, save_settings
@@ -31,13 +36,11 @@ class SnipOCRService:
         self.detector = SnipDetector(
             window_seconds=self.settings.snip_process_window_seconds
         )
-        self.engine = create_engine(
-            self.settings.ocr_engine,
-            language=self.settings.ocr_language,
-        )
+        self.engine = create_engine_from_settings(self.settings)
         self.watcher = ClipboardWatcher(on_update=self._on_clipboard_update)
         self.folder_watcher: Optional[ScreenshotFolderWatcher] = None
         self._lock = threading.Lock()
+        self._engine_lock = threading.Lock()
         self._last_result: Optional[OCRResult] = None
         self._last_image: Optional[Image.Image] = None
         self._last_seq = 0
@@ -115,6 +118,93 @@ class SnipOCRService:
             enabled=self.settings.show_toast,
         )
         return self.settings.ocr_all_clipboard_images
+
+    def get_ocr_engine(self) -> str:
+        return normalize_engine_name(self.settings.ocr_engine)
+
+    def get_ocr_engine_label(self) -> str:
+        return engine_display_name(self.get_ocr_engine())
+
+    def set_ocr_engine(self, engine_name: str) -> str:
+        """Switch OCR backend and rebuild the engine. Returns canonical id."""
+        name = normalize_engine_name(engine_name)
+        self.settings.ocr_engine = name
+        save_settings(self.settings)
+        self._reload_engine(notify_user=True)
+        return name
+
+    def get_rapidocr_model_type(self) -> str:
+        mt = (self.settings.rapidocr_model_type or "auto").strip().lower()
+        return mt if mt in MODEL_PRESETS else "auto"
+
+    def set_rapidocr_model_type(self, model_type: str) -> str:
+        mt = (model_type or "auto").strip().lower()
+        if mt not in MODEL_PRESETS:
+            mt = "auto"
+        self.settings.rapidocr_model_type = mt
+        save_settings(self.settings)
+        if self.get_ocr_engine() == "rapid":
+            self._reload_engine(notify_user=True)
+        else:
+            notify(
+                "SnipOCR",
+                f"RapidOCR model set to {mt} (switch engine to RapidOCR to use)",
+                enabled=self.settings.show_toast,
+            )
+        return mt
+
+    def get_rapidocr_accel(self) -> str:
+        a = (self.settings.rapidocr_accel or "auto").strip().lower()
+        return a if a else "auto"
+
+    def set_rapidocr_accel(self, accel: str) -> str:
+        a = (accel or "auto").strip().lower()
+        if a not in ("auto", "cpu", "dml", "coreml", "cuda"):
+            a = "auto"
+        self.settings.rapidocr_accel = a
+        save_settings(self.settings)
+        if self.get_ocr_engine() == "rapid":
+            self._reload_engine(notify_user=True)
+        else:
+            notify(
+                "SnipOCR",
+                f"RapidOCR accel set to {a}",
+                enabled=self.settings.show_toast,
+            )
+        return a
+
+    def _reload_engine(self, *, notify_user: bool = False) -> None:
+        with self._engine_lock:
+            self.engine = create_engine_from_settings(self.settings)
+            label = engine_display_name(self.get_ocr_engine())
+            ready = getattr(self.engine, "ready", lambda: True)()
+            if not ready:
+                err = getattr(self.engine, "init_error", lambda: None)() or "not ready"
+                logger.error("OCR engine reload failed: %s", err)
+                if notify_user:
+                    notify("SnipOCR", f"{label}: {err}", enabled=True)
+                return
+            detail = ""
+            resolved = getattr(self.engine, "resolved_config", None)
+            if callable(resolved):
+                cfg = resolved()
+                if cfg:
+                    detail = (
+                        f" [{cfg.get('rec_model', '')}/"
+                        f"{cfg.get('rec_version', '')} {cfg.get('lang_rec', '')}]"
+                    )
+            logger.info(
+                "OCR engine ready: %s (%s)%s",
+                getattr(self.engine, "name", label),
+                self.get_ocr_engine(),
+                detail,
+            )
+            if notify_user:
+                notify(
+                    "SnipOCR",
+                    f"OCR engine: {label}{detail}",
+                    enabled=self.settings.show_toast,
+                )
 
     def get_last(self) -> tuple[Optional[OCRResult], Optional[Image.Image]]:
         return self._last_result, self._last_image
@@ -242,15 +332,17 @@ class SnipOCRService:
             if not should:
                 return
 
-            if not self.engine.ready():
+            with self._engine_lock:
+                engine = self.engine
+            if not engine.ready():
                 notify(
                     "SnipOCR",
-                    self.engine.init_error() or "OCR engine not ready",
+                    engine.init_error() or "OCR engine not ready",
                     enabled=self.settings.show_toast,
                 )
                 return
 
-            result = self.engine.recognize(image)
+            result = engine.recognize(image)
             text = result.text
             if self.settings.collapse_single_newlines and text:
                 text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)

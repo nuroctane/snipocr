@@ -24,6 +24,14 @@ DEFAULTS = {
     "watch_screenshot_folders": True,
     "collapse_single_newlines": False,
     "snip_process_window_seconds": 4.0,
+    # RapidOCR + ONNX (used when ocr_engine is "rapid")
+    "rapidocr_model_type": "auto",  # auto | small | mobile | server | tiny
+    "rapidocr_ocr_version": "auto",  # auto | PP-OCRv6 | PP-OCRv5 | PP-OCRv4
+    "rapidocr_use_cls": True,  # text-line orientation classifier
+    "rapidocr_text_score": 0.5,  # drop low-confidence lines
+    "rapidocr_accel": "auto",  # auto | cpu | dml | coreml | cuda
+    "rapidocr_intra_op_threads": -1,  # ONNX Runtime threads (-1 = default)
+    "rapidocr_inter_op_threads": -1,
 }
 
 
@@ -47,6 +55,13 @@ class Settings:
     watch_screenshot_folders: bool = True
     collapse_single_newlines: bool = False
     snip_process_window_seconds: float = 4.0
+    rapidocr_model_type: str = "auto"
+    rapidocr_ocr_version: str = "auto"
+    rapidocr_use_cls: bool = True
+    rapidocr_text_score: float = 0.5
+    rapidocr_accel: str = "auto"
+    rapidocr_intra_op_threads: int = -1
+    rapidocr_inter_op_threads: int = -1
 
     def to_dict(self) -> dict:
         return asdict(self)

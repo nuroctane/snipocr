@@ -3,6 +3,15 @@ Pillow>=10.0.0
 pystray>=0.19.5
 psutil>=5.9.0
 
+# Cross-platform neural OCR (RapidOCR + ONNX Runtime)
+# Works on Windows, macOS, and Linux — fully offline after model download.
+rapidocr>=3.0.0
+onnxruntime>=1.17.0
+# Optional GPU packages (install instead of onnxruntime if desired):
+#   Windows GPU (DirectML):  pip install onnxruntime-directml
+#   NVIDIA CUDA:             pip install onnxruntime-gpu
+#   (macOS CoreML is included in the standard onnxruntime wheel when available)
+
 # Windows
 pywin32>=306; sys_platform == "win32"
 winotify>=1.1.0; sys_platform == "win32"
