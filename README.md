@@ -15,45 +15,6 @@ Works on **Windows** and **macOS**. When you capture the screen, SnipOCR:
 
 ---
 
-## Repository
-
-| | |
-|--|--|
-| **Public repo** | [github.com/nuroctane/snipocr](https://github.com/nuroctane/snipocr) |
-| **Default branch** | `main` |
-| **Clone (HTTPS)** | `https://github.com/nuroctane/snipocr.git` |
-
-### Clone a fresh copy
-
-```bash
-git clone https://github.com/nuroctane/snipocr.git
-cd snipocr
-```
-
-### Keep your local copy in sync
-
-From the project directory:
-
-```bash
-# Download remote updates and show whether you're ahead/behind
-git fetch origin
-git status
-
-# Update local main to match GitHub (when you have no local commits to keep)
-git checkout main
-git pull origin main
-```
-
-You should see something like: `Your branch is up to date with 'origin/main'` and a clean working tree (`nothing to commit`).
-
-If you made local commits and want them on GitHub:
-
-```bash
-git push origin main
-```
-
----
-
 ## Platforms
 
 | | Windows | macOS |
@@ -107,15 +68,14 @@ Or:
 ### Windows
 
 ```powershell
-git clone https://github.com/nuroctane/snipocr.git
-cd snipocr
+cd path\to\snipocr
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python main.py
 ```
 
-Or, after clone:
+Or:
 
 ```powershell
 .\scripts\run.ps1
@@ -124,15 +84,14 @@ Or, after clone:
 ### macOS
 
 ```bash
-git clone https://github.com/nuroctane/snipocr.git
-cd snipocr
+cd path/to/snipocr
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
-Or, after clone:
+Or:
 
 ```bash
 chmod +x scripts/run.sh
