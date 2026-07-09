@@ -4,20 +4,45 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Callable, Optional
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageEnhance
+
+from .paths import logo_png
 
 logger = logging.getLogger(__name__)
 
 
-def _make_icon(color: str = "#2D7FF9") -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+def _load_tray_icon(*, processing: bool = False, disabled: bool = False) -> Image.Image:
+    """Load branded logo for the tray; fall back to a simple geometric mark."""
+    path = logo_png(64)
+    if not path.exists():
+        path = logo_png()
+    try:
+        img = Image.open(path).convert("RGBA")
+        img = img.resize((64, 64), Image.Resampling.LANCZOS)
+    except Exception:
+        img = _fallback_icon()
+
+    if processing:
+        # Warm the blue accents slightly so the tray shows activity.
+        overlay = Image.new("RGBA", img.size, (245, 166, 35, 48))
+        img = Image.alpha_composite(img, overlay)
+    elif disabled:
+        img = ImageEnhance.Color(img).enhance(0.15)
+        img = ImageEnhance.Brightness(img).enhance(0.65)
+
+    return img
+
+
+def _fallback_icon() -> Image.Image:
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 255))
     draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle((4, 4, 60, 60), radius=12, fill=color)
-    # Simple "T" for text
-    draw.rectangle((20, 18, 44, 24), fill="white")
-    draw.rectangle((29, 24, 35, 48), fill="white")
+    draw.rectangle((8, 8, 56, 56), outline=(235, 245, 255, 255), width=3)
+    draw.line((18, 28, 40, 28), fill=(235, 245, 255, 255), width=3)
+    draw.line((18, 36, 46, 36), fill=(90, 180, 255, 255), width=3)
+    draw.line((18, 44, 36, 44), fill=(235, 245, 255, 255), width=3)
     return img
 
 
@@ -40,6 +65,7 @@ class TrayApp:
         self.is_ocr_all = is_ocr_all
         self._icon = None
         self._thread: Optional[threading.Thread] = None
+        self._processing = False
 
     def start(self) -> None:
         import pystray
@@ -64,7 +90,7 @@ class TrayApp:
 
         self._icon = pystray.Icon(
             "SnipOCR",
-            _make_icon(),
+            _load_tray_icon(disabled=not self.is_enabled()),
             "SnipOCR — listening for snips",
             menu,
         )
@@ -82,17 +108,26 @@ class TrayApp:
             except Exception:
                 pass
 
-    def set_processing(self, processing: bool) -> None:
+    def _refresh_icon(self) -> None:
         if not self._icon:
             return
         try:
-            color = "#F5A623" if processing else "#2D7FF9"
-            self._icon.icon = _make_icon(color)
-            self._icon.title = (
-                "SnipOCR — OCR running…" if processing else "SnipOCR — listening for snips"
+            self._icon.icon = _load_tray_icon(
+                processing=self._processing,
+                disabled=not self.is_enabled(),
             )
+            if self._processing:
+                self._icon.title = "SnipOCR — OCR running…"
+            elif not self.is_enabled():
+                self._icon.title = "SnipOCR — disabled"
+            else:
+                self._icon.title = "SnipOCR — listening for snips"
         except Exception:
             pass
+
+    def set_processing(self, processing: bool) -> None:
+        self._processing = processing
+        self._refresh_icon()
 
     def notify_balloon(self, title: str, message: str) -> None:
         if self._icon:
@@ -103,6 +138,7 @@ class TrayApp:
 
     def _toggle_enabled(self, _icon=None, _item=None) -> None:
         self.on_toggle_enabled()
+        self._refresh_icon()
         if self._icon:
             self._icon.update_menu()
 

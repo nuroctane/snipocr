@@ -1,5 +1,11 @@
 # SnipOCR
 
+<p align="center">
+  <img src="assets/logo.png" alt="SnipOCR logo" width="160" height="160">
+</p>
+
+<p align="center"><strong>SnipOCR</strong> — automatic local OCR for Windows Snipping Tool captures.</p>
+
 Automatic **local OCR** for Windows Snipping Tool captures.
 
 1. Press **Win+Shift+S** and snip text on screen  
@@ -98,6 +104,11 @@ Logs:
 ```
 snipocr/
   main.py
+  assets/
+    logo.png          # master brand mark (black + geometric)
+    logo.ico          # Windows tray / window icon
+    logo-*.png        # sized exports
+    icon-*.png
   app/
     clipboard_io.py
     clipboard_watcher.py
@@ -107,11 +118,13 @@ snipocr/
     tray.py
     settings.py
     notifications.py
+    paths.py
     ocr/
       windows_ocr.py
   scripts/
     run.ps1
     install_ocr_lang.ps1
+    generate_logo.py
 ```
 
 ## Troubleshooting

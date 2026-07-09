@@ -17,14 +17,32 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app.paths import logo_ico, logo_png
 from app.result_ui import ResultPopup
 from app.service import SnipOCRService
-from app.settings import load_settings
 from app.tray import TrayApp
 
 LOG_DIR = Path.home() / "AppData" / "Local" / "SnipOCR"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "snipocr.log"
+
+
+def _apply_root_icon(root: tk.Tk) -> None:
+    ico = logo_ico()
+    png = logo_png(32)
+    try:
+        if ico.exists():
+            root.iconbitmap(default=str(ico))
+    except Exception:
+        pass
+    try:
+        if png.exists():
+            from PIL import Image, ImageTk
+
+            root._snipocr_icon = ImageTk.PhotoImage(Image.open(png))  # type: ignore[attr-defined]
+            root.iconphoto(True, root._snipocr_icon)  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def setup_logging() -> None:
@@ -47,6 +65,7 @@ def main() -> int:
     root = tk.Tk()
     root.withdraw()
     root.title("SnipOCR")
+    _apply_root_icon(root)
 
     service = SnipOCRService()
     settings = service.settings
