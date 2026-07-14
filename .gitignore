@@ -28,3 +28,6 @@ desktop.ini
 # Secrets
 .env
 .env.*
+
+# Local agent instructions only (never publish to main)
+AGENTS.md
